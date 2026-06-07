@@ -12,16 +12,13 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const corsHeaders = buildCorsHeaders(request, env);
 
     // OPTIONS 预检请求直接放行
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        },
+        headers: corsHeaders,
       });
     }
 
@@ -48,9 +45,9 @@ export default {
       const response = await fetch(proxyRequest);
 
       const newHeaders = new Headers(response.headers);
-      newHeaders.set('Access-Control-Allow-Origin', '*');
-      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-      newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      for (const [key, value] of Object.entries(corsHeaders)) {
+        newHeaders.set(key, value);
+      }
 
       return new Response(response.body, {
         status: response.status,
@@ -71,3 +68,22 @@ export default {
     return assetResponse;
   },
 };
+
+function buildCorsHeaders(request, env) {
+  const origin = request.headers.get('Origin');
+  const allowed = (env.ALLOWED_ORIGIN || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  const allowOrigin = allowed.length === 0
+    ? (origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : '')
+    : (origin && allowed.includes(origin) ? origin : allowed[0]);
+
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Vary': 'Origin',
+  };
+  if (allowOrigin) headers['Access-Control-Allow-Origin'] = allowOrigin;
+  return headers;
+}

@@ -62,8 +62,17 @@
           </div>
         </div>
 
-        <div class="space-y-3">
-          <MonitorCard v-for="(m, idx) in monitors" :key="m.id" :monitor="m" :index="idx" />
+        <div class="space-y-6">
+          <section v-for="section in monitorSections" :key="section.name" class="space-y-3">
+            <div v-if="monitorSections.length > 1" class="flex items-center justify-between">
+              <h3 class="text-xs font-bold text-slate-500 dark:text-slate-500 flex items-center gap-2">
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                {{ section.name }}
+              </h3>
+              <span class="text-[11px] font-mono text-slate-400 dark:text-slate-600">{{ section.items.length }} 项</span>
+            </div>
+            <MonitorCard v-for="(m, idx) in section.items" :key="m.id" :monitor="m" :index="idx" />
+          </section>
         </div>
       </div>
     </main>
@@ -101,6 +110,15 @@ const avgLatency = computed(() => {
     const active = activeMonitors.value.filter(m => m.latency != null);
     if (active.length === 0) return null;
     return Math.round(active.reduce((sum, m) => sum + m.latency, 0) / active.length);
+});
+const monitorSections = computed(() => {
+    const groups = new Map();
+    for (const monitor of monitors.value) {
+        const tag = (monitor.tags || '').split(',').map(t => t.trim()).filter(Boolean)[0] || '未分组';
+        if (!groups.has(tag)) groups.set(tag, []);
+        groups.get(tag).push(monitor);
+    }
+    return [...groups.entries()].map(([name, items]) => ({ name, items }));
 });
 
 const fetchMonitors = async () => {

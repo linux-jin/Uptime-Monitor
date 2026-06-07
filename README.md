@@ -65,12 +65,12 @@
 
 ### 2. 安装 Node.js
 
-前往 [nodejs.org](https://nodejs.org/) 下载并安装 **LTS 版本**（推荐 v20+）。
+前往 [nodejs.org](https://nodejs.org/) 下载并安装 **LTS 版本**（推荐 v22+，新版 Wrangler 需要 Node 22 或更高版本）。
 
 安装完成后，打开终端验证：
 
 ```bash
-node -v    # 应输出 v20.x.x 或更高
+node -v    # 应输出 v22.x.x 或更高
 npm -v     # 应输出 10.x.x 或更高
 ```
 
@@ -145,6 +145,8 @@ database_id = "你的database_id"   # ← 替换为前置准备中复制的 ID
 
 [vars]
 ADMIN_API_KEY = "你自定义的登录口令"  # ← 设置管理后台密码，任意字符串
+ALLOWED_ORIGIN = "https://你的项目名.pages.dev" # ← 限制管理 API 允许的前端来源
+SESSION_TTL_HOURS = "12"             # ← 管理后台登录有效期
 ```
 
 > [!WARNING]
@@ -176,9 +178,6 @@ cp .env.example .env
 编辑 `frontend/.env`，按需填入你的值（留空则不启用对应功能）：
 
 ```env
-# Google AdSense（可选，留空则不注入广告脚本）
-VITE_ADSENSE_CLIENT=
-
 # Cloudflare Web Analytics（可选，留空则不注入统计脚本）
 VITE_CF_ANALYTICS_TOKEN=
 
@@ -207,7 +206,8 @@ npx wrangler pages deploy dist --project-name=uptime-monitor
 1. 打开 [Cloudflare Dashboard](https://dash.cloudflare.com/)
 2. 进入 **Workers & Pages → uptime-monitor → Settings → Environment variables**
 3. 点击 **Add variable**，Type 选择 `Text`，Variable name 填 `WORKER_URL`，Value 填你的 Worker 地址（如 `https://uptime-worker.xxx.workers.dev`）
-4. 点击保存后**重新部署**使其生效：
+4. 再添加 `ALLOWED_ORIGIN`，Value 填你的 Pages 站点地址（如 `https://uptime-monitor.pages.dev`），用于限制跨域来源
+5. 点击保存后**重新部署**使其生效：
 
 ```bash
 npx wrangler pages deploy dist --project-name=uptime-monitor
@@ -265,7 +265,6 @@ npx wrangler pages deploy dist --project-name=uptime-monitor
 | `CLOUDFLARE_ACCOUNT_ID` | 你的 Cloudflare Account ID | ✅ |
 | `D1_DATABASE_ID` | 前置准备中创建的 D1 数据库 ID | ✅ |
 | `ADMIN_API_KEY` | 管理后台登录口令（自定义） | ✅ |
-| `VITE_ADSENSE_CLIENT` | Google AdSense client ID | ❌ 可选 |
 | `VITE_CF_ANALYTICS_TOKEN` | Cloudflare Analytics token | ❌ 可选 |
 
 #### Variables（非敏感配置）
@@ -276,6 +275,8 @@ npx wrangler pages deploy dist --project-name=uptime-monitor
 |---|---|---|
 | `VITE_FOOTER_AUTHOR` | 页脚作者名 | ❌ 可选 |
 | `VITE_FOOTER_URL` | 页脚作者链接 | ❌ 可选 |
+| `ALLOWED_ORIGIN` | Pages 站点地址，用于收紧 Worker / Pages 代理 CORS | ✅ 推荐 |
+| `SESSION_TTL_HOURS` | 管理后台登录有效期，默认 12 小时 | ❌ 可选 |
 
 ### B-4. 触发部署
 
@@ -364,7 +365,7 @@ npm run dev
 | **API 服务层** | Cloudflare Workers + [Hono](https://hono.dev/) |
 | **持久层 / 数据库** | Cloudflare D1 (Serverless SQLite) |
 | **前端构建** | [Vite](https://vite.dev/) (多页面模式) |
-| **前端 UI** | Vue 3 (CDN) + Tailwind CSS (CDN) |
+| **前端 UI** | Vue 3 + Tailwind CSS + 本地打包字体/图标 |
 | **CI/CD** | GitHub Actions → Cloudflare |
 | **第三方探针接口** | `crt.sh` (SSL) · `rdap.org` (域名期限) |
 
@@ -375,7 +376,7 @@ npm run dev
 <details>
 <summary><b>Q：如何添加通知渠道？</b></summary>
 
-进入管理后台右上角的「通知渠道」，可视化添加钉钉、企微、飞书、Telegram、Email、Webhook。添加后点击「测试」验证配置。
+进入管理后台右上角的「通知渠道」，可视化添加企业微信、飞书、钉钉、Webhook、Telegram、Email。面向国内用户时建议优先使用企业微信、飞书、钉钉或自定义 Webhook；Telegram 和 Resend Email 属于海外可选渠道，国内网络环境下可能不稳定。添加后点击「测试」验证配置。
 </details>
 
 <details>
@@ -416,7 +417,7 @@ curl "https://你的Worker地址/cdn-cgi/handler/scheduled"
 <details>
 <summary><b>Q：本地开发时 Worker 启动报警告 "Neither ADMIN_API_KEY nor ADMIN_PASSWORD is set"？</b></summary>
 
-这是因为本地 `wrangler.toml` 中没有配置认证口令。在 `[vars]` 段添加 `ADMIN_API_KEY = "你的口令"` 即可消除警告。本地开发中，即使不设置也不影响基本功能调试。
+这是因为本地 `wrangler.toml` 中没有配置认证口令。在 `[vars]` 段添加 `ADMIN_API_KEY = "你的口令"` 即可。管理接口现在默认要求配置口令，否则会返回 `Admin auth is not configured`。
 </details>
 
 ---

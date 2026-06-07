@@ -10,11 +10,11 @@
     <LoginDialog v-if="!isAuthenticated" @login="onLogin" />
 
     <!-- 顶部导航 -->
-    <AdminHeader :isDark="isDark" :loading="loading" :lastRefreshed="lastRefreshed"
+    <AdminHeader v-if="isAuthenticated" :isDark="isDark" :loading="loading" :lastRefreshed="lastRefreshed"
       @toggle-theme="toggleTheme" @refresh="fetchMonitors" @logout="logout" />
 
     <!-- 主要内容 -->
-    <main class="flex-1 max-w-5xl w-full mx-auto px-4 py-8">
+    <main v-if="isAuthenticated" class="flex-1 max-w-5xl w-full mx-auto px-4 py-8">
       <!-- 页面标题 -->
       <div class="mb-8 fade-up flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -50,6 +50,29 @@
       <!-- 统计概览 -->
       <StatsOverview v-if="isAuthenticated && monitors.length > 0" :stats="stats" />
 
+      <div v-if="isAuthenticated && health" class="mb-6 grid grid-cols-2 md:grid-cols-5 gap-2 fade-up">
+        <div class="glass rounded-xl px-4 py-3">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">D1 Logs</p>
+          <p class="text-lg font-mono font-bold text-slate-900 dark:text-white">{{ health.logs }}</p>
+        </div>
+        <div class="glass rounded-xl px-4 py-3">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Channels</p>
+          <p class="text-lg font-mono font-bold text-emerald-500">{{ health.enabled_channels }}</p>
+        </div>
+        <div class="glass rounded-xl px-4 py-3">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Daily</p>
+          <p class="text-xs font-mono font-semibold text-slate-600 dark:text-slate-300 truncate">{{ health.latest_daily_uptime || '-' }}</p>
+        </div>
+        <div class="glass rounded-xl px-4 py-3">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Last Log</p>
+          <p class="text-xs font-mono font-semibold text-slate-600 dark:text-slate-300 truncate">{{ formatDateFull(health.latest_log_at) }}</p>
+        </div>
+        <button @click="fetchHealth" class="glass rounded-xl px-4 py-3 text-left hover:border-green-500/40 transition cursor-pointer">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Self Check</p>
+          <p class="text-sm font-semibold" :class="health.ok ? 'text-emerald-500' : 'text-red-400'">{{ health.ok ? '正常' : '异常' }}</p>
+        </button>
+      </div>
+
       <!-- 加载占位 -->
       <div v-if="loading && monitors.length === 0" class="space-y-3 fade-up-d2">
         <div v-for="i in 4" :key="i" class="glass rounded-xl h-16 animate-pulse"></div>
@@ -81,7 +104,7 @@
     </main>
 
     <!-- Footer -->
-    <footer class="mt-auto py-5 border-t border-white/5">
+    <footer v-if="isAuthenticated" class="mt-auto py-5 border-t border-white/5">
       <div class="max-w-5xl mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-3">
         <p class="text-xs text-slate-600">
           &copy; {{ new Date().getFullYear() }} <a :href="footerUrl" target="_blank" class="hover:text-green-400 transition-colors font-medium">{{ footerAuthor }}</a>. All Rights Reserved.
@@ -139,7 +162,7 @@ import ConfirmDialog from '../components/admin/ConfirmDialog.vue';
 import ToastContainer from '../components/admin/ToastContainer.vue';
 
 const { isDark, toggleTheme } = useTheme('admin_theme');
-const { isAuthenticated, storedPassword, logout } = useAuth();
+const { isAuthenticated, storedToken, logout } = useAuth();
 const { addToast } = useToast();
 
 const footerAuthor = import.meta.env.VITE_FOOTER_AUTHOR || 'Uptime Monitor';
@@ -150,6 +173,7 @@ const monitors = ref([]);
 const loading = ref(false);
 const error = ref(null);
 const lastRefreshed = ref('');
+const health = ref(null);
 
 // ── 搜索/排序/筛选 ──
 const searchQuery = ref('');
@@ -194,9 +218,10 @@ const handleConfirm = (result) => {
 
 // ── 带鉴权 fetch ──
 const authFetch = async (url, options = {}) => {
-    const headers = { ...options.headers, 'Authorization': `Bearer ${storedPassword.value}` };
+    const headers = { ...options.headers, 'Authorization': `Bearer ${storedToken.value}` };
     const res = await fetchT(url, { ...options, headers });
     if (res.status === 401) {
+        sessionStorage.removeItem('uptime_admin_token');
         sessionStorage.removeItem('uptime_admin_password');
         location.reload();
     }
@@ -260,7 +285,15 @@ const fetchMonitors = async () => {
     finally { loading.value = false; }
 };
 
-const onLogin = () => { fetchMonitors(); };
+const fetchHealth = async () => {
+    if (!isAuthenticated.value) return;
+    try {
+        const res = await authFetch(`${API_BASE}/health`);
+        if (res.ok) health.value = await res.json();
+    } catch {}
+};
+
+const onLogin = () => { fetchMonitors(); fetchHealth(); };
 
 // ── 添加监控 ──
 const addMonitor = async () => {
@@ -377,7 +410,7 @@ const exportMonitors = () => {
 
 // ── 键盘快捷键 ──
 onMounted(() => {
-    if (isAuthenticated.value) { fetchMonitors(); setInterval(fetchMonitors, 30000); }
+    if (isAuthenticated.value) { fetchMonitors(); fetchHealth(); setInterval(fetchMonitors, 30000); }
     document.addEventListener('keydown', (e) => {
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
         if (e.key === 'Escape') { showAddModal.value = false; showLogs.value = false; showConfig.value = false; showChannels.value = false; showIncidents.value = false; showSettings.value = false; if (confirmModal.value.show) handleConfirm(false); }

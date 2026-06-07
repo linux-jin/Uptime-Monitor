@@ -13,7 +13,7 @@
             <div v-if="channelsLoading" class="space-y-3"><div v-for="i in 2" :key="i" class="h-16 rounded-xl bg-slate-800/50 animate-pulse"></div></div>
             <div v-for="ch in channels" :key="ch.id" class="flex items-center gap-4 px-4 py-3.5 rounded-xl bg-slate-800/40 border border-slate-700/50 mb-2.5 hover:border-slate-600/50 transition-all group">
               <div class="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 text-lg" :class="typeInfo[ch.type]?.bg || 'bg-slate-700'">
-                <span class="flex items-center justify-center" v-html="typeInfo[ch.type]?.icon || '<i class=\'fas fa-bell text-slate-400\'></i>'"></span>
+                <i :class="typeInfo[ch.type]?.iconClass || 'fas fa-bell text-slate-400'"></i>
               </div>
               <div class="flex-1 min-w-0">
                 <div class="flex items-center gap-2"><span class="font-medium text-white text-sm truncate">{{ ch.name }}</span><span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">{{ typeInfo[ch.type]?.label || ch.type }}</span></div>
@@ -27,7 +27,7 @@
                 <button @click="deleteCh(ch)" class="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition cursor-pointer"><i class="fas fa-trash text-[10px]"></i></button>
               </div>
             </div>
-            <button @click="editing = { type: 'dingtalk', name: '', config: {} }" class="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-slate-700 text-slate-500 hover:border-green-500/40 hover:text-green-400 transition-all flex items-center justify-center gap-2 text-sm cursor-pointer">
+            <button @click="editing = { type: 'wecom', name: '', config: {} }" class="w-full mt-4 py-3 rounded-xl border-2 border-dashed border-slate-700 text-slate-500 hover:border-green-500/40 hover:text-green-400 transition-all flex items-center justify-center gap-2 text-sm cursor-pointer">
               <i class="fas fa-plus text-xs"></i> 添加通知渠道
             </button>
           </div>
@@ -41,8 +41,9 @@
                 <button v-for="(info, key) in typeInfo" :key="key" @click="editing.type = key; editing.config = {}"
                   class="flex flex-col items-center gap-1.5 py-3 rounded-xl border-2 transition-all cursor-pointer text-center"
                   :class="editing.type === key ? 'border-green-500 bg-green-900/20' : 'border-slate-700 hover:border-green-500/30'">
-                  <span class="text-lg flex items-center justify-center" v-html="info.icon"></span>
+                  <i :class="info.iconClass"></i>
                   <span class="text-[11px] font-medium" :class="editing.type === key ? 'text-green-400' : 'text-slate-400'">{{ info.label }}</span>
+                  <span v-if="info.badge" class="text-[9px] text-slate-500">{{ info.badge }}</span>
                 </button>
               </div>
             </div>
@@ -95,7 +96,7 @@ import { useToast } from '../../composables/useToast';
 import { API_BASE, fetchT } from '../../utils/api';
 
 const emit = defineEmits(['close']);
-const { storedPassword } = useAuth();
+const { storedToken } = useAuth();
 const { addToast } = useToast();
 
 const channels = ref([]);
@@ -104,16 +105,16 @@ const editing = ref(null);
 const saving = ref(false);
 
 const typeInfo = {
-    dingtalk: { icon: '<iconify-icon icon="ant-design:dingding-outlined" class="text-blue-400 text-xl"></iconify-icon>', label: '钉钉', bg: 'bg-blue-900/40' },
-    wecom: { icon: '<iconify-icon icon="ant-design:wechat-filled" class="text-green-400 text-xl"></iconify-icon>', label: '企业微信', bg: 'bg-green-900/40' },
-    feishu: { icon: '<iconify-icon icon="icon-park-outline:lark" class="text-purple-400 text-lg"></iconify-icon>', label: '飞书', bg: 'bg-purple-900/40' },
-    telegram: { icon: '<i class="fab fa-telegram text-sky-400 text-lg"></i>', label: 'Telegram', bg: 'bg-sky-900/40' },
-    webhook: { icon: '<i class="fas fa-link text-orange-400 text-lg"></i>', label: 'Webhook', bg: 'bg-orange-900/40' },
-    email: { icon: '<i class="fas fa-envelope text-rose-400 text-lg"></i>', label: 'Email', bg: 'bg-rose-900/40' },
+    wecom: { iconClass: 'fab fa-weixin text-green-400 text-xl', label: '企业微信', bg: 'bg-green-900/40' },
+    feishu: { iconClass: 'fas fa-paper-plane text-purple-400 text-lg', label: '飞书', bg: 'bg-purple-900/40' },
+    dingtalk: { iconClass: 'fas fa-comment-dots text-blue-400 text-lg', label: '钉钉', bg: 'bg-blue-900/40' },
+    webhook: { iconClass: 'fas fa-link text-orange-400 text-lg', label: 'Webhook', bg: 'bg-orange-900/40' },
+    telegram: { iconClass: 'fab fa-telegram text-sky-400 text-lg', label: 'Telegram', badge: '海外', bg: 'bg-sky-900/40' },
+    email: { iconClass: 'fas fa-envelope text-rose-400 text-lg', label: 'Email', badge: '海外', bg: 'bg-rose-900/40' },
 };
 
 const authFetch = async (url, options = {}) => {
-    const headers = { ...options.headers, 'Authorization': `Bearer ${storedPassword.value}` };
+    const headers = { ...options.headers, 'Authorization': `Bearer ${storedToken.value}` };
     return fetchT(url, { ...options, headers });
 };
 

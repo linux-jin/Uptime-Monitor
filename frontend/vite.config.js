@@ -8,15 +8,7 @@ function conditionalScripts(env) {
   return {
     name: 'conditional-scripts',
     transformIndexHtml(html) {
-      const adsenseClient = env.VITE_ADSENSE_CLIENT || '';
       const cfToken = env.VITE_CF_ANALYTICS_TOKEN || '';
-
-      html = html.replace(
-        '<!-- __ADSENSE_SCRIPT__ -->',
-        adsenseClient
-          ? `<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${adsenseClient}" crossorigin="anonymous"><\/script>`
-          : ''
-      );
 
       html = html.replace(
         '<!-- __CF_ANALYTICS_SCRIPT__ -->',

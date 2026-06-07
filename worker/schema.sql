@@ -50,6 +50,10 @@ CREATE TABLE logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_logs_monitor_created ON logs(monitor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_logs_fail_created ON logs(is_fail, created_at DESC);
+
 DROP TABLE IF EXISTS notification_channels;
 
 CREATE TABLE notification_channels (
@@ -94,10 +98,16 @@ CREATE TABLE IF NOT EXISTS daily_uptime (
   PRIMARY KEY (monitor_id, date)
 );
 
+CREATE INDEX IF NOT EXISTS idx_monitors_paused ON monitors(paused, id);
+CREATE INDEX IF NOT EXISTS idx_incidents_active ON incidents(type, status, scheduled_start, scheduled_end);
+
 -- 预置默认配置
 INSERT INTO settings (key, value) VALUES ('site_title', 'Uptime Monitor');
 INSERT INTO settings (key, value) VALUES ('site_description', '实时监控服务运行状态');
 INSERT INTO settings (key, value) VALUES ('site_logo_url', '');
+INSERT INTO settings (key, value) VALUES ('alert_template_down', '错误原因: {reason}');
+INSERT INTO settings (key, value) VALUES ('alert_template_up', '响应耗时: {latency}ms');
+INSERT INTO settings (key, value) VALUES ('alert_template_error_rate', '错误率告警：过去 5 分钟内错误率 {error_rate}%，超过阈值 {threshold}%');
 
 -- ============================================================
 -- 增量迁移脚本（已有数据库执行以下语句）
@@ -137,3 +147,12 @@ INSERT INTO settings (key, value) VALUES ('site_logo_url', '');
 -- ALTER TABLE incidents ADD COLUMN scheduled_start DATETIME;
 -- ALTER TABLE incidents ADD COLUMN scheduled_end DATETIME;
 -- ALTER TABLE incidents ADD COLUMN affected_monitors TEXT;
+--
+-- ============================================================
+-- D1 额度优化索引
+-- ============================================================
+-- CREATE INDEX IF NOT EXISTS idx_logs_monitor_created ON logs(monitor_id, created_at DESC);
+-- CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
+-- CREATE INDEX IF NOT EXISTS idx_logs_fail_created ON logs(is_fail, created_at DESC);
+-- CREATE INDEX IF NOT EXISTS idx_monitors_paused ON monitors(paused, id);
+-- CREATE INDEX IF NOT EXISTS idx_incidents_active ON incidents(type, status, scheduled_start, scheduled_end);

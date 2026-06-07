@@ -17,3 +17,5 @@ database_id = "your-d1-database-id-here"
 # [vars]
 # ADMIN_API_KEY = "your-admin-key"
 # ADMIN_PASSWORD = "your-admin-password"
+# ALLOWED_ORIGIN = "https://your-pages-project.pages.dev"
+# SESSION_TTL_HOURS = "12"

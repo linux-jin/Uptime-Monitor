@@ -2,7 +2,7 @@
   <transition enter-active-class="transition duration-200" enter-from-class="opacity-0" enter-to-class="opacity-100">
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div class="absolute inset-0 bg-black/60 backdrop-blur-sm" @click="$emit('close')"></div>
-      <div class="relative w-full max-w-md glass rounded-2xl shadow-2xl" style="animation:modal-in 0.25s ease-out">
+      <div class="relative w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col glass rounded-2xl shadow-2xl" style="animation:modal-in 0.25s ease-out">
         <div class="px-6 py-5 border-b border-white/5 flex justify-between items-center">
           <div class="flex items-center gap-3">
             <div class="w-9 h-9 bg-indigo-500/15 rounded-xl flex items-center justify-center"><i class="fas fa-cog text-indigo-400"></i></div>
@@ -10,10 +10,19 @@
           </div>
           <button @click="$emit('close')" class="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition cursor-pointer"><i class="fas fa-times"></i></button>
         </div>
-        <div class="p-6 space-y-4">
+        <div class="p-6 space-y-4 overflow-y-auto">
           <div><label class="block text-sm font-medium text-slate-300 mb-2">状态页标题</label><input v-model="settings.site_title" placeholder="Uptime Monitor" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none"></div>
           <div><label class="block text-sm font-medium text-slate-300 mb-2">页面描述</label><textarea v-model="settings.site_description" rows="2" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none resize-none"></textarea></div>
           <div><label class="block text-sm font-medium text-slate-300 mb-2">Logo URL <span class="text-xs font-normal text-slate-500">可选</span></label><input v-model="settings.site_logo_url" placeholder="https://example.com/logo.png" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none"></div>
+          <div class="border-t border-white/5 pt-4 space-y-3">
+            <div>
+              <h4 class="text-xs font-semibold uppercase text-slate-500">告警模板</h4>
+              <p class="text-xs text-slate-500 mt-1">可用变量：{name}、{url}、{reason}、{latency}、{status}、{error_rate}、{threshold}、{time}</p>
+            </div>
+            <div><label class="block text-sm font-medium text-slate-300 mb-2">故障告警详情</label><textarea v-model="settings.alert_template_down" rows="2" placeholder="错误原因: {reason}" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none resize-none"></textarea></div>
+            <div><label class="block text-sm font-medium text-slate-300 mb-2">恢复通知详情</label><textarea v-model="settings.alert_template_up" rows="2" placeholder="响应耗时: {latency}ms" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none resize-none"></textarea></div>
+            <div><label class="block text-sm font-medium text-slate-300 mb-2">错误率告警详情</label><textarea v-model="settings.alert_template_error_rate" rows="2" placeholder="错误率告警：过去 5 分钟内错误率 {error_rate}%，超过阈值 {threshold}%" class="w-full border border-slate-700 rounded-lg px-3 py-2 text-sm bg-slate-800/80 text-white focus:border-indigo-500 outline-none resize-none"></textarea></div>
+          </div>
           <button @click="save" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition cursor-pointer">保存设置</button>
           <div class="border-t border-white/5 pt-4">
             <h4 class="text-xs font-semibold uppercase text-slate-500 mb-3">导入监控配置</h4>
@@ -36,14 +45,34 @@ import { useToast } from '../../composables/useToast';
 import { API_BASE, fetchT } from '../../utils/api';
 
 const emit = defineEmits(['close', 'import-done']);
-const { storedPassword } = useAuth();
+const { storedToken } = useAuth();
 const { addToast } = useToast();
-const settings = ref({ site_title: 'Uptime Monitor', site_description: '', site_logo_url: '' });
+const settings = ref({
+    site_title: 'Uptime Monitor',
+    site_description: '',
+    site_logo_url: '',
+    alert_template_down: '',
+    alert_template_up: '',
+    alert_template_error_rate: '',
+});
 
-const authFetch = async (url, opts = {}) => fetchT(url, { ...opts, headers: { ...opts.headers, 'Authorization': `Bearer ${storedPassword.value}` } });
+const authFetch = async (url, opts = {}) => fetchT(url, { ...opts, headers: { ...opts.headers, 'Authorization': `Bearer ${storedToken.value}` } });
 
 const fetchSettings = async () => {
-    try { const r = await fetch(`${API_BASE}/settings`); if (r.ok) { const d = await r.json(); settings.value = { site_title: d.site_title || 'Uptime Monitor', site_description: d.site_description || '', site_logo_url: d.site_logo_url || '' }; } } catch {}
+    try {
+        const r = await fetch(`${API_BASE}/settings`);
+        if (r.ok) {
+            const d = await r.json();
+            settings.value = {
+                site_title: d.site_title || 'Uptime Monitor',
+                site_description: d.site_description || '',
+                site_logo_url: d.site_logo_url || '',
+                alert_template_down: d.alert_template_down || '',
+                alert_template_up: d.alert_template_up || '',
+                alert_template_error_rate: d.alert_template_error_rate || '',
+            };
+        }
+    } catch {}
 };
 
 const save = async () => {

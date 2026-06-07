@@ -50,6 +50,8 @@ jobs:
           echo '' >> wrangler.toml
           echo '[vars]' >> wrangler.toml
           echo 'ADMIN_API_KEY = "${{ secrets.ADMIN_API_KEY }}"' >> wrangler.toml
+          echo 'ALLOWED_ORIGIN = "${{ vars.ALLOWED_ORIGIN }}"' >> wrangler.toml
+          echo 'SESSION_TTL_HOURS = "${{ vars.SESSION_TTL_HOURS }}"' >> wrangler.toml
 
       - name: Deploy Worker
         uses: cloudflare/wrangler-action@v3
@@ -82,7 +84,6 @@ jobs:
         working-directory: frontend
         run: npm run build
         env:
-          VITE_ADSENSE_CLIENT: ${{ secrets.VITE_ADSENSE_CLIENT }}
           VITE_CF_ANALYTICS_TOKEN: ${{ secrets.VITE_CF_ANALYTICS_TOKEN }}
           VITE_FOOTER_AUTHOR: ${{ vars.VITE_FOOTER_AUTHOR }}
           VITE_FOOTER_URL: ${{ vars.VITE_FOOTER_URL }}

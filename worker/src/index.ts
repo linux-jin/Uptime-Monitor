@@ -81,7 +81,109 @@ type Bindings = {
   DINGTALK_SECRET: string;
   ADMIN_PASSWORD?: string;
   ADMIN_API_KEY?: string;    // 新增：API 密钥认证（优先级高于密码）
+  ALLOWED_ORIGIN?: string;
+  SESSION_TTL_HOURS?: string;
 };
+
+const textEncoder = new TextEncoder();
+const MONITOR_COLUMNS = `
+  id, name, url, method, request_headers, request_body, interval, status,
+  retry_count, last_check, keyword, user_agent, tags, domain_expiry, cert_expiry,
+  check_info_status, paused, check_ssl, check_domain, alert_silence_uptime,
+  alert_silence_ssl, alert_silence_domain, alert_error_rate, last_alert_uptime,
+  last_alert_ssl, last_alert_domain, sort_order, created_at
+`;
+
+function getAllowedOrigins(env: Bindings): string[] {
+  return (env.ALLOWED_ORIGIN || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+}
+
+function isLocalOrigin(origin: string): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+}
+
+function getAuthSecret(env: Bindings): string | null {
+  return env.ADMIN_API_KEY || env.ADMIN_PASSWORD || null;
+}
+
+function base64UrlEncode(input: string | ArrayBuffer): string {
+  const bytes = typeof input === 'string' ? textEncoder.encode(input) : new Uint8Array(input);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function base64UrlDecode(input: string): string {
+  const padded = input.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - input.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+async function sha256(value: string): Promise<Uint8Array> {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', textEncoder.encode(value)));
+}
+
+async function safeEqual(a: string, b: string): Promise<boolean> {
+  const [ha, hb] = await Promise.all([sha256(a), sha256(b)]);
+  let diff = ha.length ^ hb.length;
+  for (let i = 0; i < Math.max(ha.length, hb.length); i++) {
+    diff |= (ha[i] || 0) ^ (hb[i] || 0);
+  }
+  return diff === 0;
+}
+
+async function hmacSha256(secret: string, value: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    textEncoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  return base64UrlEncode(await crypto.subtle.sign('HMAC', key, textEncoder.encode(value)));
+}
+
+async function verifyAdminCredential(env: Bindings, credential: string): Promise<boolean> {
+  const candidates = [env.ADMIN_API_KEY, env.ADMIN_PASSWORD].filter(Boolean) as string[];
+  for (const candidate of candidates) {
+    if (await safeEqual(credential, candidate)) return true;
+  }
+  return false;
+}
+
+async function createSessionToken(env: Bindings): Promise<{ token: string; expires_at: string }> {
+  const secret = getAuthSecret(env);
+  if (!secret) throw new Error('Admin auth is not configured');
+  const configuredTtl = Number(env.SESSION_TTL_HOURS);
+  const ttlHours = Number.isFinite(configuredTtl) && configuredTtl > 0
+    ? Math.max(1, Math.min(configuredTtl, 168))
+    : 12;
+  const expiresAt = new Date(Date.now() + ttlHours * 3_600_000);
+  const payload = base64UrlEncode(JSON.stringify({ exp: expiresAt.toISOString() }));
+  const signature = await hmacSha256(secret, payload);
+  return { token: `v1.${payload}.${signature}`, expires_at: expiresAt.toISOString() };
+}
+
+async function verifySessionToken(env: Bindings, token: string): Promise<boolean> {
+  const secret = getAuthSecret(env);
+  if (!secret || !token.startsWith('v1.')) return false;
+  const parts = token.split('.');
+  if (parts.length !== 3) return false;
+  const [, payload, signature] = parts;
+  const expected = await hmacSha256(secret, payload);
+  if (!await safeEqual(signature, expected)) return false;
+  try {
+    const data = JSON.parse(base64UrlDecode(payload)) as { exp?: string };
+    return !!data.exp && new Date(data.exp).getTime() > Date.now();
+  } catch {
+    return false;
+  }
+}
 
 // ============================================================
 // Hono 应用初始化
@@ -89,13 +191,22 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use('/*', cors());
+app.use('/*', cors({
+  origin: (origin, c) => {
+    const allowed = getAllowedOrigins(c.env);
+    if (allowed.length === 0) return origin && isLocalOrigin(origin) ? origin : '';
+    if (!origin) return allowed[0];
+    return allowed.includes(origin) ? origin : '';
+  },
+  allowHeaders: ['Content-Type', 'Authorization'],
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+}));
 
 // ============================================================
 // 鉴权中间件
 // ============================================================
 
-const PROTECTED_ROUTES = ['/monitors', '/notification-channels', '/incidents', '/settings', '/test-alert'];
+const PROTECTED_ROUTES = ['/monitors', '/notification-channels', '/incidents', '/settings', '/test-alert', '/health'];
 
 app.use('/*', async (c, next) => {
   if (c.req.method === 'OPTIONS') return await next();
@@ -113,18 +224,24 @@ app.use('/*', async (c, next) => {
 
   const token = authHeader.replace(/^Bearer\s+/i, '');
 
-  // API Key 和密码均可接受（任意一个匹配即通过）
-  const apiKey = c.env.ADMIN_API_KEY;
-  const adminPassword = c.env.ADMIN_PASSWORD;
-
-  if (apiKey && token === apiKey) return await next();
-  if (adminPassword && token === adminPassword) return await next();
-  if (!apiKey && !adminPassword) {
-    console.warn('Neither ADMIN_API_KEY nor ADMIN_PASSWORD is set.');
-    return await next();
-  }
+  if (await verifySessionToken(c.env, token)) return await next();
+  if (await verifyAdminCredential(c.env, token)) return await next();
+  if (!getAuthSecret(c.env)) return c.json({ error: 'Admin auth is not configured' }, 503);
 
   return c.json({ error: 'Unauthorized: Invalid credentials' }, 401);
+});
+
+app.post('/auth/login', async (c) => {
+  try {
+    const body = await c.req.json<{ password?: string }>();
+    if (!body.password) return c.json({ error: 'Password is required' }, 400);
+    if (!getAuthSecret(c.env)) return c.json({ error: 'Admin auth is not configured' }, 503);
+    if (!await verifyAdminCredential(c.env, body.password)) return c.json({ error: 'Invalid password' }, 401);
+    const session = await createSessionToken(c.env);
+    return c.json(session);
+  } catch (e: unknown) {
+    return c.json({ error: e instanceof Error ? e.message : 'Unknown error' }, 500);
+  }
 });
 
 // ============================================================
@@ -133,7 +250,7 @@ app.use('/*', async (c, next) => {
 
 app.get('/monitors', async (c) => {
   try {
-    const { results } = await c.env.DB.prepare('SELECT * FROM monitors ORDER BY sort_order ASC, created_at ASC').all<Monitor>();
+    const { results } = await c.env.DB.prepare(`SELECT ${MONITOR_COLUMNS} FROM monitors ORDER BY sort_order ASC, created_at ASC`).all<Monitor>();
     return c.json(results);
   } catch (e: unknown) {
     return c.json({ error: e instanceof Error ? e.message : 'Unknown error' }, 500);
@@ -173,7 +290,9 @@ app.get('/monitors/public/details', async (c) => {
         INSERT OR IGNORE INTO daily_uptime (monitor_id, date, total_checks, successful_checks, avg_latency)
         SELECT monitor_id, date(created_at), COUNT(*), SUM(CASE WHEN is_fail=0 THEN 1 ELSE 0 END),
                COALESCE(CAST(AVG(CASE WHEN is_fail=0 THEN latency END) AS INTEGER), 0)
-        FROM logs WHERE date(created_at) < date('now') GROUP BY monitor_id, date(created_at)
+        FROM logs
+        WHERE created_at >= date('now','-90 days') AND created_at < date('now')
+        GROUP BY monitor_id, date(created_at)
       `).run();
     }
 
@@ -261,7 +380,7 @@ app.post('/monitors', async (c) => {
         try {
           await c.env.DB.prepare('UPDATE monitors SET check_info_status = ? WHERE id = ?')
             .bind(new Date().toISOString(), newId).run();
-          const { results } = await c.env.DB.prepare('SELECT * FROM monitors WHERE id = ?')
+          const { results } = await c.env.DB.prepare(`SELECT ${MONITOR_COLUMNS} FROM monitors WHERE id = ?`)
             .bind(newId).all<Monitor>();
           if (results[0]) await updateDomainCertInfo(c.env, results[0]);
         } catch (err) { console.error('Initial cert check failed:', err); }
@@ -346,7 +465,7 @@ app.patch('/monitors/:id/config', async (c) => {
 app.post('/monitors/:id/check', async (c) => {
   const id = c.req.param('id');
   try {
-    const { results } = await c.env.DB.prepare('SELECT * FROM monitors WHERE id = ?').bind(id).all<Monitor>();
+    const { results } = await c.env.DB.prepare(`SELECT ${MONITOR_COLUMNS} FROM monitors WHERE id = ?`).bind(id).all<Monitor>();
     if (!results[0]) return c.json({ error: 'Monitor not found' }, 404);
 
     // 强制执行证书及域名信息获取
@@ -575,7 +694,14 @@ app.get('/settings', async (c) => {
 app.put('/settings', async (c) => {
   try {
     const body = await c.req.json<Record<string, string>>();
-    const allowed = ['site_title', 'site_description', 'site_logo_url'];
+    const allowed = [
+      'site_title',
+      'site_description',
+      'site_logo_url',
+      'alert_template_down',
+      'alert_template_up',
+      'alert_template_error_rate',
+    ];
     const now = new Date().toISOString();
     for (const key of allowed) {
       if (body[key] !== undefined) {
@@ -587,6 +713,29 @@ app.put('/settings', async (c) => {
     return c.json({ success: true });
   } catch (e: unknown) {
     return c.json({ error: e instanceof Error ? e.message : 'Unknown error' }, 500);
+  }
+});
+
+app.get('/health', async (c) => {
+  try {
+    const [monitors, logs, channels, daily, lastLog] = await Promise.all([
+      c.env.DB.prepare('SELECT COUNT(*) as c FROM monitors').first<{ c: number }>(),
+      c.env.DB.prepare('SELECT COUNT(*) as c FROM logs').first<{ c: number }>(),
+      c.env.DB.prepare('SELECT COUNT(*) as c FROM notification_channels WHERE enabled = 1').first<{ c: number }>(),
+      c.env.DB.prepare('SELECT MAX(date) as d FROM daily_uptime').first<{ d: string | null }>(),
+      c.env.DB.prepare('SELECT MAX(created_at) as t FROM logs').first<{ t: string | null }>(),
+    ]);
+    return c.json({
+      ok: true,
+      checked_at: new Date().toISOString(),
+      monitors: monitors?.c ?? 0,
+      logs: logs?.c ?? 0,
+      enabled_channels: channels?.c ?? 0,
+      latest_daily_uptime: daily?.d || null,
+      latest_log_at: lastLog?.t || null,
+    });
+  } catch (e: unknown) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : 'Unknown error' }, 500);
   }
 });
 
@@ -713,7 +862,8 @@ async function aggregateDailyUptime(env: Bindings) {
       INSERT OR REPLACE INTO daily_uptime (monitor_id, date, total_checks, successful_checks, avg_latency)
       SELECT monitor_id, date(created_at), COUNT(*), SUM(CASE WHEN is_fail=0 THEN 1 ELSE 0 END),
              COALESCE(CAST(AVG(CASE WHEN is_fail=0 THEN latency END) AS INTEGER), 0)
-      FROM logs WHERE date(created_at) < date('now') AND date(created_at) >= date('now','-90 days')
+      FROM logs
+      WHERE created_at >= date('now','-1 day') AND created_at < date('now')
       GROUP BY monitor_id, date(created_at)
     `).run();
     await env.DB.prepare("DELETE FROM daily_uptime WHERE date < date('now','-90 days')").run();
@@ -751,7 +901,12 @@ async function runScheduledTasks(env: Bindings) {
 async function checkSites(env: Bindings) {
   console.log('Starting scheduled check...');
   const now = Date.now();
-  const { results } = await env.DB.prepare('SELECT * FROM monitors').all<Monitor>();
+  const { results } = await env.DB.prepare(`
+    SELECT id, name, url, method, request_headers, request_body, interval, status,
+           retry_count, last_check, keyword, user_agent, check_info_status, paused,
+           alert_silence_uptime, alert_error_rate, last_alert_uptime
+    FROM monitors
+  `).all<Monitor>();
   const tasks = results.map(async (monitor) => {
     if (monitor.paused === 1) return;
     if (isTimeToCheck(monitor, now)) await performCheck(monitor, env);
@@ -882,7 +1037,13 @@ async function performCheck(monitor: Monitor, env: Bindings) {
       } else {
         newStatus = 'DOWN';
         if (!silenced) {
-          const sent = await sendAlertToAllChannels(env, monitor, 'DOWN', `错误原因: ${reason}`);
+          const detail = await renderAlertDetail(env, 'alert_template_down', '错误原因: {reason}', {
+            reason,
+            status: String(status),
+            latency: String(latency),
+            type: 'DOWN',
+          }, monitor);
+          const sent = await sendAlertToAllChannels(env, monitor, 'DOWN', detail);
           if (sent) await env.DB.prepare('UPDATE monitors SET last_alert_uptime = ? WHERE id = ?')
             .bind(new Date().toISOString(), monitor.id).run();
         }
@@ -890,7 +1051,13 @@ async function performCheck(monitor: Monitor, env: Bindings) {
     }
   } else {
     if (monitor.status === 'DOWN') {
-      const sent = await sendAlertToAllChannels(env, monitor, 'UP', `响应耗时: ${latency}ms`);
+      const detail = await renderAlertDetail(env, 'alert_template_up', '响应耗时: {latency}ms', {
+        reason,
+        status: String(status),
+        latency: String(latency),
+        type: 'UP',
+      }, monitor);
+      const sent = await sendAlertToAllChannels(env, monitor, 'UP', detail);
       if (sent) await env.DB.prepare('UPDATE monitors SET last_alert_uptime = ? WHERE id = ?')
         .bind(new Date().toISOString(), monitor.id).run();
     }
@@ -900,6 +1067,27 @@ async function performCheck(monitor: Monitor, env: Bindings) {
 
   await env.DB.prepare('UPDATE monitors SET last_check = ?, status = ?, retry_count = ? WHERE id = ?')
     .bind(new Date().toISOString(), newStatus, newRetryCount, monitor.id).run();
+}
+
+async function renderAlertDetail(
+  env: Bindings,
+  key: string,
+  fallback: string,
+  vars: Record<string, string>,
+  monitor: Pick<Monitor, 'name' | 'url'>
+): Promise<string> {
+  let template = fallback;
+  try {
+    const row = await env.DB.prepare('SELECT value FROM settings WHERE key = ?').bind(key).first<{ value: string }>();
+    if (row?.value) template = row.value;
+  } catch { /* keep fallback */ }
+  const values: Record<string, string> = {
+    name: monitor.name,
+    url: monitor.url,
+    time: new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }),
+    ...vars,
+  };
+  return template.replace(/\{([a-z_]+)\}/g, (_, name: string) => values[name] ?? '');
 }
 
 // 错误率阈值告警
@@ -918,10 +1106,18 @@ async function checkErrorRateAlert(env: Bindings, monitor: Monitor) {
       const lastAlertMs = monitor.last_alert_uptime ? new Date(monitor.last_alert_uptime).getTime() : 0;
       if (silenceHoursUptime > 0 && (Date.now() - lastAlertMs) < silenceHoursUptime * 3_600_000) return;
 
-      const sent = await sendAlertToAllChannels(
-        env, monitor, 'DOWN',
-        `⚠ 错误率告警：过去 5 分钟内错误率 ${errorRate}%，超过阈值 ${monitor.alert_error_rate}%`
+      const detail = await renderAlertDetail(
+        env,
+        'alert_template_error_rate',
+        '错误率告警：过去 5 分钟内错误率 {error_rate}%，超过阈值 {threshold}%',
+        {
+          error_rate: String(errorRate),
+          threshold: String(monitor.alert_error_rate),
+          type: 'DOWN',
+        },
+        monitor
       );
+      const sent = await sendAlertToAllChannels(env, monitor, 'DOWN', detail);
       if (sent) await env.DB.prepare('UPDATE monitors SET last_alert_uptime = ? WHERE id = ?')
         .bind(new Date().toISOString(), monitor.id).run();
     }
@@ -944,10 +1140,10 @@ async function cleanupLogs(env: Bindings) {
     const { results } = await env.DB.prepare('SELECT id FROM monitors').all<{ id: number }>();
     for (const monitor of results) {
       await env.DB.prepare(`
-        DELETE FROM logs WHERE monitor_id = ? AND id NOT IN (
-          SELECT id FROM logs WHERE monitor_id = ? ORDER BY created_at DESC LIMIT 1000
+        DELETE FROM logs WHERE id IN (
+          SELECT id FROM logs WHERE monitor_id = ? ORDER BY created_at DESC LIMIT -1 OFFSET 1000
         )
-      `).bind(monitor.id, monitor.id).run();
+      `).bind(monitor.id).run();
     }
     console.log('Log cleanup completed.');
   } catch (e: unknown) { console.error('Log cleanup error:', e); }
@@ -1187,6 +1383,7 @@ async function sendEmail(cfg: Record<string, string>, monitor: Pick<Monitor, 'na
   const isDown = type === 'DOWN';
   const time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
   const title = isDown ? '🚨 突发！服务又双叒叕挂了 (╯°□°)╯︵ ┻━┻' : '🎉 仰卧起坐成功！服务满血复活 ヾ(≧▽≦*)o';
+  const subject = title;
   const statusColor = isDown ? '#f43f5e' : '#10b981';
   const statusText = isDown ? '💥 彻底躺平 (DOWN)' : '✨ 支楞起来了 (UP)';
   const quote = isDown ? '☕ 稳住别慌，带上薪水去拯救世界~' : '🚀 虚惊一场，接着奏乐接着舞~';

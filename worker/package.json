@@ -13,11 +13,11 @@
     "start": "wrangler dev --ip 0.0.0.0"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240208.0",
-    "typescript": "^5.3.3",
-    "wrangler": "^4.76.0"
+    "@cloudflare/workers-types": "^4.20260607.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.98.0"
   },
   "dependencies": {
-    "hono": "^4.0.4"
+    "hono": "^4.12.23"
   }
 }

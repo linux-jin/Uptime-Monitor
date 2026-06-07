@@ -75,12 +75,12 @@ import { formatDateFull } from '../../utils/format';
 
 const props = defineProps({ monitors: Array });
 defineEmits(['close']);
-const { storedPassword } = useAuth();
+const { storedToken } = useAuth();
 const { addToast } = useToast();
 const incidents = ref([]);
 const form = ref({ title: '', description: '', severity: 'info', type: 'incident', scheduled_start: '', scheduled_end: '', affected_ids: [] });
 
-const authFetch = async (url, opts = {}) => fetchT(url, { ...opts, headers: { ...opts.headers, 'Authorization': `Bearer ${storedPassword.value}` } });
+const authFetch = async (url, opts = {}) => fetchT(url, { ...opts, headers: { ...opts.headers, 'Authorization': `Bearer ${storedToken.value}` } });
 
 const fetch_ = async () => { try { const r = await authFetch(`${API_BASE}/incidents/all`); if (r.ok) incidents.value = await r.json(); } catch {} };
 const create = async () => {
